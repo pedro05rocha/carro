@@ -1,0 +1,17 @@
+global:
+  scrape_interval: 2s
+  evaluation_interval: 2s
+
+scrape_configs:
+  - job_name: limo-backend
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["backend:8000"]
+
+# No Grafana Cloud Portal, abre a stack > Prometheus > Details e copia
+# o remote write endpoint e o user (ID da instância de métricas).
+remote_write:
+  - url: "SUBSTITUIR_PELO_REMOTE_WRITE_ENDPOINT"
+    basic_auth:
+      username: "SUBSTITUIR_PELO_ID_DA_INSTANCIA"
+      password_file: /run/secrets/grafana_cloud_token

@@ -27,6 +27,7 @@ grafana-plugin/pedro-limofleetcontrol-panel/  plugin React do Grafana para gerir
 grafana/Dockerfile                     compila o plugin e cria a imagem Grafana
 
 docker-compose.yml                     backend, Prometheus e Grafana
+docker-compose.cloud.yml               envio opcional de métricas para Grafana Cloud
 frontend/                               cliente React opcional/standalone
 ```
 
@@ -57,6 +58,26 @@ docker compose up -d --build
 3. Abre [http://localhost:3000](http://localhost:3000) e entra com `GRAFANA_ADMIN_USER` e `GRAFANA_ADMIN_PASSWORD`. O dashboard **LIMO Fleet - Telemetria** é a página inicial. O login do Grafana e a autenticação do operador são duas etapas distintas: no painel principal, inicia sessão com `LIMO_ADMIN_USER` e `LIMO_ADMIN_PASSWORD`.
 
 O painel de operação dentro do Grafana permite adicionar um nome, IP e porta (9090 por defeito), ligar, escolher o robô e controlar o movimento. A seleção altera o filtro dos gráficos Grafana. O histórico pode demorar alguns segundos a aparecer após a primeira telemetria.
+
+## Enviar métricas para Grafana Cloud
+
+O Prometheus local pode continuar a recolher e guardar métricas e, em simultâneo, encaminhá-las para a tua stack Cloud. No Grafana Cloud, abre a tua stack, entra em **Prometheus → Details** e copia o endpoint de remote write e o ID da instância. Cria também um token de Access Policy com permissão `metrics:write`; o token funciona como palavra-passe e não deve ser enviado por mensagem nem guardado no Git. [Instruções oficiais do Grafana Cloud](https://grafana.com/docs/grafana-cloud/send-data/metrics/metrics-prometheus/prometheus-config-examples/integration-guide/).
+
+Na raiz do projeto, prepara a configuração e o ficheiro do token:
+
+```bash
+cp backend/prometheus/prometheus-cloud.yml.example backend/prometheus/prometheus-cloud.yml
+```
+
+Edita `backend/prometheus/prometheus-cloud.yml`: substitui os dois valores `SUBSTITUIR_...` pelo endpoint e ID da tua stack. Guarda o token, sem aspas, em `backend/prometheus/grafana-cloud-token` (um token de escrita para métricas). Estes dois ficheiros locais estão ignorados pelo Git.
+
+Inicia ou atualiza os serviços com o ficheiro Cloud adicional:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.cloud.yml up -d --build
+```
+
+Para voltar ao envio apenas local, usa `docker compose -f docker-compose.yml up -d`. Os dados já enviados continuam na Cloud. O dashboard de controlo personalizado continua no Grafana local; o Grafana Cloud recebe as métricas e permite consultá-las, mas não carrega este plugin personalizado não assinado. A página inicial Cloud pode ser configurada depois de adicionares um dashboard compatível.
 
 Para iniciar a aplicação React antiga em separado (opcional):
 

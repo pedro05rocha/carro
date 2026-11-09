@@ -1,0 +1,9 @@
+services:
+  prometheus:
+    command:
+      - --config.file=/etc/prometheus/prometheus-cloud.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+    volumes:
+      - ./backend/prometheus/prometheus-cloud.yml:/etc/prometheus/prometheus-cloud.yml:ro
+      - ./backend/prometheus/grafana-cloud-token:/run/secrets/grafana_cloud_token:ro

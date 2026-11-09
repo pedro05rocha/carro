@@ -10,3 +10,5 @@ frontend/.env
 # local secrets
 .env
 .swc-cache/
+backend/prometheus/prometheus-cloud.yml
+backend/prometheus/grafana-cloud-token

@@ -44,6 +44,22 @@ docker compose up -d --build
 
 Depois inicia o frontend com `cd frontend && cp .env.example .env && npm install && npm run dev`. O Grafana fica em `http://localhost:3000`. Entra com `GRAFANA_ADMIN_USER` e `GRAFANA_ADMIN_PASSWORD` de `.env`, e abre **Dashboards → LIMO Fleet → LIMO Fleet - Telemetria**.
 
+### Opcional: enviar métricas para Grafana Cloud
+
+Na stack Cloud, abre **Prometheus → Details** e copia o endpoint de remote write e o ID da instância. Cria um token de Access Policy com `metrics:write`. Depois, a partir da raiz do projeto:
+
+```bash
+cp backend/prometheus/prometheus-cloud.yml.example backend/prometheus/prometheus-cloud.yml
+```
+
+Edita o ficheiro copiado com o endpoint e ID, e guarda apenas o token (sem aspas) em `backend/prometheus/grafana-cloud-token`. Não partilhes o token nem o coloques no Git. Os ficheiros locais estão ignorados pelo Git. Ativa o envio para a Cloud com:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.cloud.yml up -d --build
+```
+
+O Prometheus continua a guardar o histórico local e encaminha as amostras para a Cloud. O painel de controlo personalizado permanece no Grafana local; na Cloud podes consultar as métricas, mas este plugin não assinado não está disponível lá. Guia oficial: https://grafana.com/docs/grafana-cloud/send-data/metrics/metrics-prometheus/prometheus-config-examples/integration-guide/.
+
 ## Validar métricas
 
 1. Confirma que os três serviços estão ativos: `docker compose ps`.
