@@ -1,0 +1,52 @@
+services:
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      LIMO_ADMIN_USER: ${LIMO_ADMIN_USER:?Set LIMO_ADMIN_USER in .env}
+      LIMO_ADMIN_PASSWORD: ${LIMO_ADMIN_PASSWORD:?Set LIMO_ADMIN_PASSWORD in .env}
+      LIMO_SECRET_KEY: ${LIMO_SECRET_KEY:?Set LIMO_SECRET_KEY in .env}
+      LIMO_DB: /data/robots.json
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - limo-data:/data
+
+  prometheus:
+    image: prom/prometheus:v3.16.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+    volumes:
+      - ./backend/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      - backend
+
+  grafana:
+    build:
+      context: .
+      dockerfile: grafana/Dockerfile
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS: pedro-limofleetcontrol-panel
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/limo-fleet.json
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./backend/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./backend/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+
+volumes:
+  limo-data:
+  prometheus-data:
+  grafana-data:

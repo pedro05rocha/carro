@@ -4,10 +4,12 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import jwt, websockets
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, IPvAnyAddress
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from .metrics import REGISTRY, refresh_metrics, remove_robot_metrics, CMD_VEL_COMMANDS, EMERGENCY_STOPS
 
 SECRET=os.getenv('LIMO_SECRET_KEY','')
 USER=os.getenv('LIMO_ADMIN_USER','admin'); PASSWORD=os.getenv('LIMO_ADMIN_PASSWORD','')
@@ -45,7 +47,7 @@ async def ros_reader(rid):
    async for raw in ws:
     m=json.loads(raw)
     if m.get('op')=='publish' and m.get('topic') in TOPICS:
-     r['data'][m['topic']]=m.get('msg');r['updated_at']=datetime.now(timezone.utc).isoformat()
+     r['data'][m['topic']]=m.get('msg');r.setdefault('last_seen', {})[m['topic']]=time.time();r['updated_at']=datetime.now(timezone.utc).isoformat()
      event={'type':'telemetry','robot_id':rid,'data':{**r['data'],'updated_at':r['updated_at']}}
      for q in tuple(listeners):
       try:q.put_nowait(event)
@@ -64,7 +66,7 @@ async def ros_reader(rid):
 async def lifespan(app):
  if DB.exists():
   try:
-   for x in json.loads(DB.read_text()): robots[x['id']]={**x,'status':'offline','data':{},'task':None,'ws':None}
+   for x in json.loads(DB.read_text()): robots[x['id']]={**x,'status':'offline','data':{},'last_seen':{},'task':None,'ws':None}
   except Exception: pass
  async def watchdog():
   while True:
@@ -82,6 +84,10 @@ app=FastAPI(title='LIMO Fleet API',version='1.0.0',lifespan=lifespan)
 app.add_middleware(CORSMiddleware,allow_origins=os.getenv('CORS_ORIGINS','http://localhost:5173').split(','),allow_credentials=False,allow_methods=['*'],allow_headers=['*'])
 @app.get('/api/health')
 async def health():return {'status':'ok'}
+@app.get('/metrics', include_in_schema=False)
+async def prometheus_metrics():
+ refresh_metrics(robots)
+ return Response(generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
 @app.post('/api/login')
 async def login(x:Login):
  if not SECRET: raise HTTPException(503,'Define LIMO_SECRET_KEY antes de iniciar o servidor')
@@ -93,7 +99,7 @@ def public(r):return {k:r[k] for k in ('id','name','host','port','status')}|{'la
 async def list_robots(_:str=Depends(user_dep)):return [public(r) for r in robots.values()]
 @app.post('/api/robots')
 async def add_robot(x:RobotIn,_:str=Depends(user_dep)):
- rid=str(uuid.uuid4());robots[rid]={'id':rid,'name':x.name,'host':str(x.host),'port':x.port,'status':'offline','data':{},'task':None,'ws':None};persist();return public(robots[rid])
+ rid=str(uuid.uuid4());robots[rid]={'id':rid,'name':x.name,'host':str(x.host),'port':x.port,'status':'offline','data':{},'last_seen':{},'task':None,'ws':None};persist();return public(robots[rid])
 def get_robot(rid):
  if rid not in robots:raise HTTPException(404,'Robô não encontrado')
  return robots[rid]
@@ -101,12 +107,12 @@ def get_robot(rid):
 async def remove_robot(rid:str,_:str=Depends(user_dep)):
  r=get_robot(rid);await stop(r)
  if r.get('task'):r['task'].cancel()
- robots.pop(rid);persist();return {'ok':True}
+ remove_robot_metrics(r);robots.pop(rid);persist();return {'ok':True}
 @app.post('/api/robots/{rid}/connect')
 async def connect(rid:str,_:str=Depends(user_dep)):
  r=get_robot(rid)
  if r.get('task') and not r['task'].done():return public(r)
- r['status']='connecting';r['last_error']=None;r['task']=asyncio.create_task(ros_reader(rid));return public(r)
+ r['status']='connecting';r['last_error']=None;r['data']={};r['last_seen']={};r['task']=asyncio.create_task(ros_reader(rid));return public(r)
 @app.post('/api/robots/{rid}/disconnect')
 async def disconnect(rid:str,_:str=Depends(user_dep)):
  r=get_robot(rid);await stop(r)
@@ -123,13 +129,16 @@ async def control(rid:str,x:Move,user:str=Depends(user_dep)):
   if lease['until']>time.monotonic() and (lease['user']!=user or lease['robot']!=rid):raise HTTPException(423,'Outro utilizador controla um robô. Aguarda a libertação do controlo.')
   lease.update(user=user,robot=rid,until=time.monotonic()+.8)
  await publish(r,'/cmd_vel','geometry_msgs/msg/Twist',{'linear':{'x':x.linear,'y':0,'z':0},'angular':{'x':0,'y':0,'z':x.angular}})
+ CMD_VEL_COMMANDS.labels(robot_id=r['id'],robot_name=r['name']).inc()
  return {'ok':True,'lease_ms':800}
 @app.post('/api/emergency-stop')
 async def emergency(x:StopRequest,user:str=Depends(user_dep)):
  targets=[get_robot(x.robot_id)] if x.robot_id else list(robots.values())
  async with lock:
   if x.robot_id is None or lease['robot']==x.robot_id:lease.update(user=None,robot=None,until=0)
- for r in targets:await stop(r)
+ for r in targets:
+  await stop(r)
+  if r.get('ws') and r.get('status')=='connected':EMERGENCY_STOPS.labels(robot_id=r['id'],robot_name=r['name']).inc()
  return {'ok':True,'stopped':len(targets)}
 @app.websocket('/ws')
 async def telemetry(ws:WebSocket):
