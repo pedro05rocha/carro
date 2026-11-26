@@ -1,6 +1,6 @@
 # LIMO Fleet · Interface principal Grafana
 
-Projeto web para operação da frota AgileX LIMO PRO. A interface principal é um dashboard do Grafana que abre diretamente com um painel personalizado para iniciar sessão, adicionar robôs por IP, ligar/desligar, selecionar o robô, comandar movimento e acionar paragem de emergência. Os painéis abaixo mostram o histórico e estado através de Prometheus. O backend FastAPI continua a validar autenticação, limites, lease exclusiva e timeout; o painel Grafana não publica diretamente no rosbridge.
+Projeto para operação da frota AgileX LIMO PRO. A interface principal é um dashboard do Grafana com um painel personalizado para iniciar sessão, adicionar robôs por IP, ligar/desligar, selecionar o robô, comandar movimento e acionar paragem de emergência. O botão “Mais detalhes” abre os gráficos históricos do Prometheus. O backend FastAPI valida autenticação, limites, lease exclusiva e timeout; o painel Grafana não publica diretamente no rosbridge.
 
 ## Fluxo
 
@@ -21,19 +21,19 @@ backend/Dockerfile                     imagem FastAPI
 backend/prometheus/prometheus.yml      scrape e retenção
 backend/grafana/provisioning/          datasource e dashboard provisionados
 backend/grafana/dashboards/            painéis de histórico
+scripts/start-limo.sh                  arranque de ROS bridge, bringup e câmara
 
-grafana-plugin/pedro-limofleetcontrol-panel/  plugin React do Grafana para gerir e comandar
+grafana-plugin/pedro-limofleetcontrol-panel/  plugin Grafana para gerir e comandar
 
 grafana/Dockerfile                     compila o plugin e cria a imagem Grafana
 
 docker-compose.yml                     backend, Prometheus e Grafana
 docker-compose.cloud.yml               envio opcional de métricas para Grafana Cloud
-frontend/                               cliente React opcional/standalone
 ```
 
 ## Arranque no Ubuntu
 
-Requisitos: Docker Engine com Docker Compose e Node.js 20+ (para o frontend standalone opcional).
+Requisitos: Docker Engine com Docker Compose.
 
 1. Na raiz do projeto, cria o ficheiro local de credenciais:
 
@@ -55,9 +55,11 @@ Cola esse valor em `LIMO_SECRET_KEY`. Não publiques `.env`.
 docker compose up -d --build
 ```
 
-3. Abre [http://localhost:3000](http://localhost:3000) e entra com `GRAFANA_ADMIN_USER` e `GRAFANA_ADMIN_PASSWORD`. O dashboard **LIMO Fleet - Telemetria** é a página inicial. O login do Grafana e a autenticação do operador são duas etapas distintas: no painel principal, inicia sessão com `LIMO_ADMIN_USER` e `LIMO_ADMIN_PASSWORD`.
+3. Abre [http://localhost:3000](http://localhost:3000) e entra com `GRAFANA_ADMIN_USER` e `GRAFANA_ADMIN_PASSWORD`. O dashboard **PLATO · Consola LIMO** é a página inicial. O botão “Mais detalhes” abre **LIMO Fleet - Mais detalhes**, com os gráficos históricos. O login do Grafana e a autenticação do operador são duas etapas distintas: no painel principal, inicia sessão com `LIMO_ADMIN_USER` e `LIMO_ADMIN_PASSWORD`.
 
 O painel de operação dentro do Grafana permite adicionar um nome, IP e porta (9090 por defeito), ligar, escolher o robô e controlar o movimento. A seleção altera o filtro dos gráficos Grafana. O histórico pode demorar alguns segundos a aparecer após a primeira telemetria.
+
+Para iniciar os processos de cada LIMO em três terminais separados, copia `scripts/start-limo.sh` para cada robô e executa-o com `--robot-ip IP_DO_ROBO --server-ip IP_DO_PC`. Usa o mesmo script nos restantes robôs, mudando apenas `--robot-ip`. Os detalhes estão em [docs/robot-setup.md](docs/robot-setup.md#iniciar-um-robô).
 
 ## Enviar métricas para Grafana Cloud
 
@@ -78,15 +80,6 @@ docker compose -f docker-compose.yml -f docker-compose.cloud.yml up -d --build
 ```
 
 Para voltar ao envio apenas local, usa `docker compose -f docker-compose.yml up -d`. Os dados já enviados continuam na Cloud. O dashboard de controlo personalizado continua no Grafana local; o Grafana Cloud recebe as métricas e permite consultá-las, mas não carrega este plugin personalizado não assinado. A página inicial Cloud pode ser configurada depois de adicionares um dashboard compatível.
-
-Para iniciar a aplicação React antiga em separado (opcional):
-
-```bash
-cd frontend
-cp .env.example .env
-npm install
-npm run dev
-```
 
 A lista de robôs, dados Grafana e histórico Prometheus ficam em volumes persistentes. `docker compose down` pára os serviços sem apagar volumes; evita `docker compose down -v` se quiseres manter dados.
 
@@ -140,4 +133,4 @@ O dashboard pressupõe `sensor_msgs/msg/LaserScan`, `sensor_msgs/msg/Imu`, `nav_
 
 ## Estado de validação
 
-O painel/plugin foi gerado a partir da estrutura oficial de plugins Grafana e está integrado no dashboard provisionado. O dashboard JSON, código Python e configuração Compose foram verificados; o frontend React compila. O build local do plugin Grafana no Windows falha porque o binding nativo SWC não é carregado neste ambiente. A imagem Docker foi preparada para o compilar em Linux, mas o Docker Desktop desta sessão não está ativo. A validação final do plugin, Compose completo e controlo requer `docker compose up --build` num Ubuntu com Docker, depois ensaio real com o LIMO.
+O painel personalizado está integrado no dashboard principal provisionado do Grafana. Não é necessário iniciar um servidor frontend separado. Os gráficos históricos ficam no dashboard “LIMO Fleet - Mais detalhes”.

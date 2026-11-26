@@ -7,9 +7,10 @@ services:
       LIMO_ADMIN_PASSWORD: ${LIMO_ADMIN_PASSWORD:?Set LIMO_ADMIN_PASSWORD in .env}
       LIMO_SECRET_KEY: ${LIMO_SECRET_KEY:?Set LIMO_SECRET_KEY in .env}
       LIMO_DB: /data/robots.json
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
     ports:
       - "127.0.0.1:8000:8000"
+      - "5004:5004/udp"
     volumes:
       - limo-data:/data
 

@@ -1,5 +1,20 @@
 # Configuração do LIMO e validação da monitorização
 
+## Iniciar um robô
+
+Copia `scripts/start-limo.sh` do projeto para cada robô. No ambiente gráfico de cada LIMO, executa o script indicando o IP do próprio robô e o IP do computador onde corre o backend. O script abre três terminais independentes para rosbridge, bringup e câmara. Cada terminal carrega o workspace ROS e usa o mesmo `ROS_DOMAIN_ID`, `RMW_IMPLEMENTATION` e `ROS_LOCALHOST_ONLY`.
+
+Exemplo para o primeiro robô:
+
+```bash
+chmod +x ~/start-limo.sh
+~/start-limo.sh --robot-ip 192.168.1.105 --server-ip 192.168.1.101
+```
+
+No segundo robô, executa o mesmo comando com o IP do segundo LIMO, por exemplo `--robot-ip 192.168.1.106`. O IP deve coincidir com o registado em **Gestão de robôs** no Grafana. O endereço de vídeo continua a ser o mesmo para todos os robôs (`IP_DO_PC:5004`); o backend separa os fluxos pelo IP de origem.
+
+O IP do servidor tem como predefinição `192.168.1.101`; altera `--server-ip` se necessário. Para outra câmara, usa `--camera-device /dev/video1`, por exemplo. O caminho do workspace predefinido é `~/limo_ros2_ws/install/setup.bash`; para alterá-lo, define `LIMO_ROS_SETUP` antes de iniciar o script. É necessário ter `ffmpeg`, o workspace ROS e um terminal gráfico instalados. Se faltar FFmpeg, instala com `sudo apt install ffmpeg`. Por SSH sem ambiente gráfico, o script não consegue abrir as três janelas.
+
 ## Rosbridge em Foxy
 
 O ROS Index lista `rosbridge_suite` e `rosbridge_server` na distribuição Foxy. Foxy terminou o suporte upstream; usa pacotes compilados para essa distribuição e testa no robô antes de operação.
@@ -42,7 +57,7 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Depois inicia o frontend com `cd frontend && cp .env.example .env && npm install && npm run dev`. O Grafana fica em `http://localhost:3000`. Entra com `GRAFANA_ADMIN_USER` e `GRAFANA_ADMIN_PASSWORD` de `.env`, e abre **Dashboards → LIMO Fleet → LIMO Fleet - Telemetria**.
+O Grafana fica em `http://localhost:3000`. Entra com `GRAFANA_ADMIN_USER` e `GRAFANA_ADMIN_PASSWORD` de `.env` e abre **PLATO · Consola LIMO**. A consola de operação está dentro do Grafana; “Mais detalhes” abre o dashboard de gráficos históricos **LIMO Fleet - Mais detalhes**.
 
 ### Opcional: enviar métricas para Grafana Cloud
 
@@ -70,7 +85,7 @@ O Prometheus continua a guardar o histórico local e encaminha as amostras para 
 6. A métrica de sensor fica online apenas enquanto o tópico está a publicar (janela de frescura de 5 segundos). Para validar valores, compara com `ros2 topic echo` no robô.
 7. Se Prometheus não recolher, consulta `http://localhost:3000` → **Connections → Data sources → Prometheus** e valida **Prometheus → Status → Targets** (o alvo configurado é `backend:8000`).
 
-O vetor de ranges do LiDAR é resumido à distância mínima finita e positiva. Não é apropriado publicar cada feixe como série Prometheus; mantém a visualização bruta no painel ROS quando for implementada. A câmara DaBai DC1 ainda não tem tópico ROS confirmado e fica indisponível.
+O vetor de ranges do LiDAR é resumido à distância mínima finita e positiva. Não é apropriado publicar cada feixe como série Prometheus; mantém a visualização bruta no painel ROS quando for implementada. O painel principal e o painel personalizado do Grafana mostram a mesma transmissão de câmara autenticada. O backend recebe RTP em UDP 5004, converte os fotogramas com FFmpeg e serve MJPEG; o emissor de vídeo no LIMO ainda tem de enviar para o endereço da máquina onde corre Docker. Sem esse emissor, a área da câmara mostra «À espera de vídeo RTP».
 
 ## Teste seguro de movimento
 
