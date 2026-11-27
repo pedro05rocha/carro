@@ -12,6 +12,11 @@ import json
 import os
 import time
 import uuid
+import base64
+import math
+import struct
+import sys
+from array import array
 
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
@@ -69,6 +74,14 @@ TOPICS = {
     "/limo_status": "limo_msgs/msg/LimoStatus"
 }
 
+# Point cloud (só é subscrito quando o site pede o modo pointcloud)
+POINTCLOUD_TOPIC = os.getenv("LIMO_POINTCLOUD_TOPIC", "/camera/depth/points")
+POINTCLOUD_TYPE = "sensor_msgs/msg/PointCloud2"
+POINTCLOUD_MAX_POINTS = int(os.getenv("LIMO_POINTCLOUD_MAX_POINTS", "5000"))
+POINTCLOUD_THROTTLE_MS = int(os.getenv("LIMO_POINTCLOUD_THROTTLE_MS", "500"))
+
+pointcloud_listeners = {}  # robot_id -> conjunto de filas (uma por cliente)
+
 
 # ============================================================
 # GLOBAL STATE
@@ -125,6 +138,10 @@ class Move(BaseModel):
 
 class StopRequest(BaseModel):
     robot_id: str | None = None
+
+
+class CameraMode(BaseModel):
+    mode: str = Field(pattern=r'^(video|pointcloud)$')
 
 
 # ============================================================
@@ -405,6 +422,7 @@ async def camera_stream_generator(robot_id):
 
 
 async def remove_robot_camera(robot_id):
+    pointcloud_listeners.pop(robot_id, None)
     task = camera_worker_tasks.pop(robot_id, None)
     if task:
         task.cancel()
@@ -418,6 +436,103 @@ async def remove_robot_camera(robot_id):
     camera_sequences.pop(robot_id, None)
     camera_conditions.pop(robot_id, None)
 
+# ============================================================
+# POINT CLOUD
+# ============================================================
+
+def decode_pointcloud(msg):
+    """
+    Converte um PointCloud2 (JSON do rosbridge) em floats little-endian
+    x,y,z intercalados, reduzidos a POINTCLOUD_MAX_POINTS.
+    """
+
+    fields = {f["name"]: f for f in msg.get("fields", [])}
+
+    # datatype 7 = FLOAT32
+    if not all(name in fields and fields[name].get("datatype") == 7 for name in "xyz"):
+        return None
+
+    data = msg.get("data")
+
+    if isinstance(data, str):
+        data = base64.b64decode(data)
+    else:
+        data = bytes(data or [])
+
+    step = msg.get("point_step") or 0
+
+    if not step or not data:
+        return None
+
+    total = len(data) // step
+    stride = max(1, total // POINTCLOUD_MAX_POINTS)
+    endian = ">" if msg.get("is_bigendian") else "<"
+    ox, oy, oz = fields["x"]["offset"], fields["y"]["offset"], fields["z"]["offset"]
+
+    points = array("f")
+
+    for i in range(0, total, stride):
+        base = i * step
+        x = struct.unpack_from(endian + "f", data, base + ox)[0]
+        y = struct.unpack_from(endian + "f", data, base + oy)[0]
+        z = struct.unpack_from(endian + "f", data, base + oz)[0]
+
+        if math.isfinite(x) and math.isfinite(y) and math.isfinite(z) and z > 0:
+            points.extend((x, y, z))
+
+    if not points:
+        return None
+
+    # Se vier em milímetros, converte para metros
+    if max(points[2::3]) > 100:
+        points = array("f", (value * 0.001 for value in points))
+
+    if sys.byteorder == "big":
+        points.byteswap()
+
+    return points.tobytes()
+
+
+def push_pointcloud(robot_id, payload):
+    """Entrega a nuvem mais recente a cada cliente, descartando a antiga."""
+
+    for queue in tuple(pointcloud_listeners.get(robot_id, ())):
+
+        if queue.full():
+            try:
+                queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+
+        try:
+            queue.put_nowait(payload)
+        except asyncio.QueueFull:
+            pass
+
+
+async def set_pointcloud_subscription(robot, enabled):
+    """Liga ou desliga a subscrição do point cloud no rosbridge."""
+
+    ws = robot.get("ws")
+
+    if not ws or robot["status"] != "connected":
+        return
+
+    if enabled:
+        message = {
+            "op": "subscribe",
+            "topic": POINTCLOUD_TOPIC,
+            "type": POINTCLOUD_TYPE,
+            "throttle_rate": POINTCLOUD_THROTTLE_MS,
+            "queue_length": 1
+        }
+    else:
+        message = {
+            "op": "unsubscribe",
+            "topic": POINTCLOUD_TOPIC
+        }
+
+    await ws.send(json.dumps(message))
 
 # ============================================================
 # ROBOT COMMUNICATION
@@ -551,11 +666,34 @@ async def ros_reader(rid):
                     })
                 )
 
+            # Se o backend reiniciou com o robô em modo point cloud
+            if robot.get("camera_mode") == "pointcloud":
+                await set_pointcloud_subscription(robot, True)
+                
             # Receive messages from rosbridge
 
             async for raw in ws:
 
                 message = json.loads(raw)
+
+                if (
+                    message.get("op") == "publish"
+                    and message.get("topic") == POINTCLOUD_TOPIC
+                ):
+
+                    try:
+                        payload = await asyncio.to_thread(
+                            decode_pointcloud,
+                            message.get("msg") or {}
+                        )
+                    except Exception as error:
+                        print(f"Point cloud decode error: {error}")
+                        payload = None
+
+                    if payload:
+                        push_pointcloud(rid, payload)
+
+                    continue
 
                 if (
                     message.get("op") == "publish"
@@ -1192,6 +1330,68 @@ async def emergency(
         "stopped": len(targets)
     }
 
+
+# ============================================================
+# CAMERA MODE (video <-> point cloud)
+# ============================================================
+
+@app.post("/api/robots/{rid}/camera-mode")
+async def camera_mode(
+    rid: str,
+    data: CameraMode,
+    user: str = Depends(user_dep)
+):
+
+    robot = get_robot(rid)
+
+    await publish(
+        robot,
+        "/camera_mode",
+        "std_msgs/msg/String",
+        {
+            "data": data.mode
+        }
+    )
+    robot["camera_mode"] = data.mode
+
+    await set_pointcloud_subscription(robot, data.mode == "pointcloud")
+
+    return {
+        "ok": True,
+        "mode": data.mode
+    }
+
+@app.websocket("/ws/pointcloud")
+async def pointcloud_socket(ws: WebSocket):
+
+    token = ws.query_params.get("token", "")
+    robot_id = ws.query_params.get("robot_id", "")
+
+    try:
+        claims(token)
+    except HTTPException:
+        await ws.close(code=4401)
+        return
+
+    if robot_id not in robots:
+        await ws.close(code=4404)
+        return
+
+    await ws.accept()
+
+    queue = asyncio.Queue(maxsize=1)
+    pointcloud_listeners.setdefault(robot_id, set()).add(queue)
+
+    try:
+        while True:
+            payload = await queue.get()
+            await ws.send_bytes(payload)
+
+    except (WebSocketDisconnect, RuntimeError):
+        pass
+
+    finally:
+        pointcloud_listeners.get(robot_id, set()).discard(queue)
 
 # ============================================================
 # DASHBOARD WEBSOCKET
